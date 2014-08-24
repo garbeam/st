@@ -453,7 +453,7 @@ static void getbuttoninfo(XEvent *);
 static void mousereport(XEvent *);
 
 static size_t utf8decode(char *, long *, size_t);
-static long utf8decodebyte(char, size_t *);
+static long utf8decodebyte(uchar, size_t *);
 static size_t utf8encode(long, char *, size_t);
 static char utf8encodebyte(long, size_t);
 static size_t utf8len(char *);
@@ -590,11 +590,18 @@ utf8decode(char *c, long *u, size_t clen) {
 }
 
 long
-utf8decodebyte(char c, size_t *i) {
-	for(*i = 0; *i < LEN(utfmask); ++(*i))
-		if(((uchar)c & utfmask[*i]) == utfbyte[*i])
-			return (uchar)c & ~utfmask[*i];
-	return 0;
+utf8decodebyte(uchar c, size_t *len) {
+	size_t i;
+	long ret = 0;
+
+	for(i = 0; i < LEN(utfmask); ++i) {
+		if((c & utfmask[i]) == utfbyte[i]) {
+			ret = c & ~utfmask[i];
+			break;
+		}
+	}
+	*len = i;
+	return ret;
 }
 
 size_t
