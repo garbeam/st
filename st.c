@@ -363,7 +363,7 @@ static void strparse(void);
 static void strreset(void);
 
 static int tattrset(int);
-static void tprinter(char *, size_t);
+static void tprinter(wchar_t);
 static void tdumpsel(void);
 static void tdumpline(int);
 static void tdump(void);
@@ -452,12 +452,12 @@ static void selsnap(int, int *, int *, int);
 static void getbuttoninfo(XEvent *);
 static void mousereport(XEvent *);
 
-static size_t utf8decode(char *, long *, size_t);
-static long utf8decodebyte(uchar, size_t *);
-static size_t utf8encode(long, char *);
-static char utf8encodebyte(long, size_t);
+static size_t utf8decode(char *, wchar_t *, size_t);
+static wchar_t utf8decodebyte(uchar, size_t *);
+static size_t utf8encode(wchar_t, char *);
+static char utf8encodebyte(wchar_t, size_t);
 static size_t utf8len(char *);
-static size_t utf8validate(long *, size_t);
+static size_t utf8validate(wchar_t *, size_t);
 
 static ssize_t xwrite(int, const char *, size_t);
 static void *xmalloc(size_t);
@@ -567,9 +567,9 @@ xstrdup(char *s) {
 }
 
 size_t
-utf8decode(char *c, long *u, size_t clen) {
+utf8decode(char *c, wchar_t *u, size_t clen) {
 	size_t i, j, len, type;
-	long udecoded;
+	wchar_t udecoded;
 
 	*u = UTF_INVALID;
 	if(!clen)
@@ -589,7 +589,7 @@ utf8decode(char *c, long *u, size_t clen) {
 	return len;
 }
 
-long
+wchar_t
 utf8decodebyte(uchar c, size_t *len) {
 	size_t i;
 	long ret = 0;
@@ -605,7 +605,7 @@ utf8decodebyte(uchar c, size_t *len) {
 }
 
 size_t
-utf8encode(long u, char *c) {
+utf8encode(wchar_t u, char *c) {
 	size_t len, i;
 
 	len = utf8validate(&u, 0);
@@ -620,17 +620,17 @@ utf8encode(long u, char *c) {
 }
 
 char
-utf8encodebyte(long u, size_t i) {
+utf8encodebyte(wchar_t u, size_t i) {
 	return utfbyte[i] | (u & ~utfmask[i]);
 }
 
 size_t
 utf8len(char *c) {
-	return utf8decode(c, &(long){0}, UTF_SIZ);
+	return utf8decode(c, &(wchar_t){0}, UTF_SIZ);
 }
 
 size_t
-utf8validate(long *u, size_t i) {
+utf8validate(wchar_t *u, size_t i) {
 	if(!BETWEEN(*u, utfmin[i], utfmax[i]) || BETWEEN(*u, 0xD800, 0xDFFF))
 		*u = UTF_INVALID;
 	for(i = 1; *u > utfmax[i]; ++i)
@@ -1253,7 +1253,7 @@ ttyread(void) {
 	char *ptr;
 	char s[UTF_SIZ];
 	int charsize; /* size of utf8 char in bytes */
-	long unicodep;
+	wchar_t unicodep;
 	int ret;
 
 	/* append read bytes to unprocessed bytes */
@@ -2255,7 +2255,13 @@ strreset(void) {
 }
 
 void
-tprinter(char *s, size_t len) {
+tprinter(wchar_t u) {
+	size_t len;
+	char s[UTF_SIZ];
+
+	if((len = utf8encode(u, s)) == 0)
+		return;
+
 	if(iofd != -1 && xwrite(iofd, s, len) < 0) {
 		fprintf(stderr, "Error writing in %s:%s\n",
 			opt_io, strerror(errno));
@@ -2282,24 +2288,34 @@ printsel(const Arg *arg) {
 void
 tdumpsel(void) {
 	char *ptr;
+	size_t len;
+	wchar_t u;
 
-	if((ptr = getsel())) {
-		tprinter(ptr, strlen(ptr));
-		free(ptr);
+	if((ptr = getsel()) == NULL)
+		return;
+
+	while((len = utf8decode(ptr, &u, UTF_SIZ))) {
+		tprinter(u);
+		ptr += len;
 	}
+	free(ptr);
 }
 
 void
 tdumpline(int n) {
 	Glyph *bp, *end;
+	wchar_t u;
 
 	bp = &term.line[n][0];
 	end = &bp[MIN(tlinelen(n), term.col) - 1];
 	if(bp != end || bp->c[0] != ' ') {
-		for( ;bp <= end; ++bp)
-			tprinter(bp->c, utf8len(bp->c));
+		for( ;bp <= end; ++bp) {
+			if(!utf8decode(bp->c, &u, UTF_SIZ))
+				break;
+			tprinter(u);
+		}
 	}
-	tprinter("\n", 1);
+	tprinter('\n');
 }
 
 void
@@ -2566,7 +2582,7 @@ void
 tputc(char *c, int len) {
 	uchar ascii;
 	bool control;
-	long unicodep;
+	wchar_t unicodep;
 	int width;
 	Glyph *gp;
 
@@ -2581,7 +2597,7 @@ tputc(char *c, int len) {
 	}
 
 	if(IS_SET(MODE_PRINT))
-		tprinter(c, len);
+		tprinter(unicodep);
 	control = ISCONTROL(unicodep);
 
 	/*
@@ -3180,7 +3196,7 @@ xdraws(char *s, Glyph base, int x, int y, int charlen, int bytelen) {
 	int frcflags;
 	int u8fl, u8fblen, u8cblen, doesexist;
 	char *u8c, *u8fs;
-	long unicodep;
+	wchar_t unicodep;
 	Font *font = &dc.font;
 	FcResult fcres;
 	FcPattern *fcpattern, *fontpattern;
@@ -3553,7 +3569,7 @@ drawregion(int x1, int y1, int x2, int y2) {
 	Glyph base, new;
 	char buf[DRAW_BUF_SIZ];
 	bool ena_sel = sel.ob.x != -1 && sel.alt == IS_SET(MODE_ALTSCREEN);
-	long unicodep;
+	wchar_t unicodep;
 
 	if(!(xw.state & WIN_VISIBLE))
 		return;
