@@ -379,20 +379,20 @@ static void tmoveato(int, int);
 static void tnew(int, int);
 static void tnewline(int);
 static void tputtab(int);
-static void tputc(char *, int);
+static void tputc(wchar_t);
 static void treset(void);
 static void tresize(int, int);
 static void tscrollup(int, int);
 static void tscrolldown(int, int);
 static void tsetattr(int *, int);
-static void tsetchar(char *, Glyph *, int, int);
+static void tsetchar(wchar_t, Glyph *, int, int);
 static void tsetscroll(int, int);
 static void tswapscreen(void);
 static void tsetdirt(int, int);
 static void tsetdirtattr(int);
 static void tsetmode(bool, bool, int *, int);
 static void tfulldirt(void);
-static void techo(char *, int);
+static void techo(wchar_t);
 static void tcontrolcode(uchar );
 static void tdectest(char );
 static int32_t tdefcolor(int *, int *, int);
@@ -1251,7 +1251,6 @@ ttyread(void) {
 	static char buf[BUFSIZ];
 	static int buflen = 0;
 	char *ptr;
-	char s[UTF_SIZ];
 	int charsize; /* size of utf8 char in bytes */
 	wchar_t unicodep;
 	int ret;
@@ -1264,8 +1263,7 @@ ttyread(void) {
 	buflen += ret;
 	ptr = buf;
 	while((charsize = utf8decode(ptr, &unicodep, buflen))) {
-		utf8encode(unicodep, s);
-		tputc(s, charsize);
+		tputc(unicodep);
 		ptr += charsize;
 		buflen -= charsize;
 	}
@@ -1282,9 +1280,17 @@ ttywrite(const char *s, size_t n) {
 
 void
 ttysend(char *s, size_t n) {
+	int len;
+	wchar_t u;
+
 	ttywrite(s, n);
-	if(IS_SET(MODE_ECHO))
-		techo(s, n);
+	if(IS_SET(MODE_ECHO)) {
+		while ((len = utf8decode(s, &u, n)) != 0) {
+			techo(u);
+			n -= len;
+			s += len;
+		}
+	}
 }
 
 void
@@ -1534,7 +1540,7 @@ tmoveto(int x, int y) {
 }
 
 void
-tsetchar(char *c, Glyph *attr, int x, int y) {
+tsetchar(wchar_t u, Glyph *attr, int x, int y) {
 	static char *vt100_0[62] = { /* 0x41 - 0x7e */
 		"↑", "↓", "→", "←", "█", "▚", "☃", /* A - G */
 		0, 0, 0, 0, 0, 0, 0, 0, /* H - O */
@@ -1545,15 +1551,20 @@ tsetchar(char *c, Glyph *attr, int x, int y) {
 		"⎻", "─", "⎼", "⎽", "├", "┤", "┴", "┬", /* p - w */
 		"│", "≤", "≥", "π", "≠", "£", "·", /* x - ~ */
 	};
+	char c[UTF_SIZ];
 
+	c[0] = '\0';
 	/*
 	 * The table is proudly stolen from rxvt.
 	 */
 	if(term.trantbl[term.charset] == CS_GRAPHIC0) {
-		if(BETWEEN(c[0], 0x41, 0x7e) && vt100_0[c[0] - 0x41]) {
-			c = vt100_0[c[0] - 0x41];
+		if(BETWEEN(u, 0x41, 0x7e) && vt100_0[u - 0x41]) {
+			strcpy(c, vt100_0[u - 0x41]);
 		}
 	}
+
+	if (c[0] == '\0')
+		utf8encode(u, c);
 
 	if(term.line[y][x].mode & ATTR_WIDE) {
 		if(x+1 < term.col) {
@@ -2343,26 +2354,18 @@ tputtab(int n) {
 }
 
 void
-techo(char *buf, int len) {
-	for(; len > 0; buf++, len--) {
-		char c = *buf;
-
-		if(ISCONTROL((uchar) c)) { /* control code */
-			if(c & 0x80) {
-				c &= 0x7f;
-				tputc("^", 1);
-				tputc("[", 1);
-			} else if(c != '\n' && c != '\r' && c != '\t') {
-				c ^= 0x40;
-				tputc("^", 1);
-			}
-			tputc(&c, 1);
-		} else {
-			break;
+techo(wchar_t u) {
+	if(ISCONTROL(u)) { /* control code */
+		if(u & 0x80) {
+			u &= 0x7f;
+			tputc('^');
+			tputc('[');
+		} else if(u != '\n' && u != '\r' && u != '\t') {
+			u ^= 0x40;
+			tputc('^');
 		}
 	}
-	if(len)
-		tputc(buf, len);
+	tputc(u);
 }
 
 void
@@ -2380,13 +2383,12 @@ tdeftran(char ascii) {
 
 void
 tdectest(char c) {
-	static char E[UTF_SIZ] = "E";
 	int x, y;
 
 	if(c == '8') { /* DEC screen alignment test. */
 		for(x = 0; x < term.col; ++x) {
 			for(y = 0; y < term.row; ++y)
-				tsetchar(E, &term.c.attr, x, y);
+				tsetchar('E', &term.c.attr, x, y);
 		}
 	}
 }
@@ -2417,7 +2419,6 @@ tstrsequence(uchar c) {
 
 void
 tcontrolcode(uchar ascii) {
-	static char question[UTF_SIZ] = "?";
 
 	switch(ascii) {
 	case '\t':   /* HT */
@@ -2458,7 +2459,7 @@ tcontrolcode(uchar ascii) {
 		term.charset = 1;
 		return;
 	case '\032': /* SUB */
-		tsetchar(question, &term.c.attr, term.c.x, term.c.y);
+		tsetchar('?', &term.c.attr, term.c.x, term.c.y);
 	case '\030': /* CAN */
 		csireset();
 		break;
@@ -2579,26 +2580,20 @@ eschandle(uchar ascii) {
 }
 
 void
-tputc(char *c, int len) {
-	uchar ascii;
+tputc(wchar_t u) {
+	char s[UTF_SIZ];
+	int len;
 	bool control;
-	wchar_t unicodep;
 	int width;
 	Glyph *gp;
 
-	if(len == 1) {
-		width = 1;
-		unicodep = ascii = *c;
-	} else {
-		utf8decode(c, &unicodep, UTF_SIZ);
-		width = wcwidth(unicodep);
-		control = ISCONTROLC1(unicodep);
-		ascii = unicodep;
-	}
+
+	width = wcwidth(u);
+	control = ISCONTROLC1(u);
 
 	if(IS_SET(MODE_PRINT))
-		tprinter(unicodep);
-	control = ISCONTROL(unicodep);
+		tprinter(u);
+	control = ISCONTROL(u);
 
 	/*
 	 * STR sequence must be checked before anything else
@@ -2607,31 +2602,33 @@ tputc(char *c, int len) {
 	 * character.
 	 */
 	if(term.esc & ESC_STR) {
-		if(width == 1 &&
-		   (ascii == '\a' || ascii == 030 ||
-		    ascii == 032  || ascii == 033 ||
-		    ISCONTROLC1(unicodep))) {
+		if(u == '\a' || u == 030 || u == 032  || u == 033 ||
+		   ISCONTROLC1(u)) {
 			term.esc &= ~(ESC_START|ESC_STR);
 			term.esc |= ESC_STR_END;
-		} else if(strescseq.len + len < sizeof(strescseq.buf) - 1) {
-			memmove(&strescseq.buf[strescseq.len], c, len);
-			strescseq.len += len;
-			return;
 		} else {
-		/*
-		 * Here is a bug in terminals. If the user never sends
-		 * some code to stop the str or esc command, then st
-		 * will stop responding. But this is better than
-		 * silently failing with unknown characters. At least
-		 * then users will report back.
-		 *
-		 * In the case users ever get fixed, here is the code:
-		 */
-		/*
-		 * term.esc = 0;
-		 * strhandle();
-		 */
-			return;
+			/* TODO: make csiescseq.buf buffer of wchar_t */
+			len = utf8encode(u, s);
+			if(strescseq.len + len < sizeof(strescseq.buf) - 1) {
+				memmove(&strescseq.buf[strescseq.len], s, len);
+				strescseq.len += len;
+				return;
+			} else {
+			/*
+			 * Here is a bug in terminals. If the user never sends
+			 * some code to stop the str or esc command, then st
+			 * will stop responding. But this is better than
+			 * silently failing with unknown characters. At least
+			 * then users will report back.
+			 *
+			 * In the case users ever get fixed, here is the code:
+			 */
+			/*
+			 * term.esc = 0;
+			 * strhandle();
+			 */
+				return;
+			}
 		}
 	}
 
@@ -2641,15 +2638,16 @@ tputc(char *c, int len) {
 	 * they must not cause conflicts with sequences.
 	 */
 	if(control) {
-		tcontrolcode(ascii);
+		tcontrolcode(u);
 		/*
 		 * control codes are not shown ever
 		 */
 		return;
 	} else if(term.esc & ESC_START) {
 		if(term.esc & ESC_CSI) {
-			csiescseq.buf[csiescseq.len++] = ascii;
-			if(BETWEEN(ascii, 0x40, 0x7E)
+			/* TODO: make csiescseq.buf buffer of wchar_t */
+			csiescseq.buf[csiescseq.len++] = u;
+			if(BETWEEN(u, 0x40, 0x7E)
 					|| csiescseq.len >= \
 					sizeof(csiescseq.buf)-1) {
 				term.esc = 0;
@@ -2658,11 +2656,11 @@ tputc(char *c, int len) {
 			}
 			return;
 		} else if(term.esc & ESC_ALTCHARSET) {
-			tdeftran(ascii);
+			tdeftran(u);
 		} else if(term.esc & ESC_TEST) {
-			tdectest(ascii);
+			tdectest(u);
 		} else {
-			if (!eschandle(ascii))
+			if (!eschandle(u))
 				return;
 			/* sequence already finished */
 		}
@@ -2688,7 +2686,7 @@ tputc(char *c, int len) {
 	if(term.c.x+width > term.col)
 		tnewline(1);
 
-	tsetchar(c, &term.c.attr, term.c.x, term.c.y);
+	tsetchar(u, &term.c.attr, term.c.x, term.c.y);
 
 	if(width == 2) {
 		gp->mode |= ATTR_WIDE;
